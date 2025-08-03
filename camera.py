@@ -39,14 +39,14 @@ class Camera:
         self.update_movement()
 
     def update_movement(self):
-
-        self.yaw += self.app.mouse_rel[0] * self.sensitivity
-        self.pitch -= self.app.mouse_rel[1] * self.sensitivity
-
-        self.moved = any(self.app.mouse_rel)
+        rotation_speed = self.sensitivity * self.app.mouse_inputs[0]
+        self.yaw += self.app.mouse_rel[0] * rotation_speed 
+        self.pitch -= self.app.mouse_rel[1] * rotation_speed
+        self.moved = any(self.app.mouse_rel) and self.app.mouse_inputs[0]
 
         keys = self.app.keys
         direction = vec3(0)
+
         if keys[K_w]:
             direction += self.forward
         if keys[K_s]:
