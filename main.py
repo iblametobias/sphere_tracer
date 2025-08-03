@@ -19,7 +19,7 @@ from sys import exit
 from dataclasses import is_dataclass
 
 from camera import Camera
-from dclasses import Sphere, Material
+from dclasses import Sphere
 
 import world1
 
