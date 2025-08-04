@@ -1,74 +1,336 @@
-#!usr/bin/env
-
-"""
-Version 0.1
-Made by 0rd3r
-"""
-
-import pygame as pg
-from pygame.locals import *
+import glm
+from glm import vec2, vec3
 
 import moderngl as gl
 
-import numpy as np
+import imgui
+import moderngl_window as mglw
+from moderngl_window.integrations.imgui import ModernglWindowRenderer
 
-from pyglm import glm
-from pyglm.glm import vec2, vec3
-
-from sys import exit
+from camera import Camera
 
 from dataclasses import is_dataclass
 
-from camera import Camera
-from dclasses import Sphere
+from dclasses import Sphere, Material
 import world1
 
-class App(object):
-    def __init__(self):
-        self.screen = pg.display.set_mode((1600, 900), OPENGL | DOUBLEBUF | RESIZABLE)
-        self.resolution = vec2(pg.display.get_window_size())
-        self.resolution_tuple = tuple(glm.ivec2(self.resolution))
+class WindowEvents(mglw.WindowConfig):
+    gl_version = (4, 6)
+    title = "ModernGL Window"
+    window_size = (1600, 900)
+    aspect_ratio = None
+    resizable = True
+    resource_dir = "C:\\Users\\Tobiasz\\Documents\\py\\sphere_tracer\\"
 
-        # pg.mouse.set_visible(False)
-        # pg.event.set_grab(True)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        imgui.create_context()
+        self.wnd.ctx.error
 
-        self.ctx = gl.create_context(require=4_6_0)
+        self.imgui = ModernglWindowRenderer(self.wnd)
+        self.SIDEBAR_WIDTH = 260
+        self.DATAFIELD_WIDTH = 160
 
+        self.camera = Camera(self, vec3(7, 7, 7), 60, 225, -40)
 
-        self.clock = pg.time.Clock()
-        self.delta_time = 0.0
-        self.running_time = 0.0
+        self.render_resolution = vec2(self.window_size)
+        self.rays_per_pixel = 4
+        self.max_bounce_limit = 8
 
-        self.camera = Camera(self, vec3(7, 7, 7), 60, 225, -30)
+        self.allow_accumulation = True
+        self.accumulation_frame = 0 
+        self.accumulation_time = 0.0 
 
-        self.rays_per_pixel: int = 4
-        self.max_bounce_limit: int = 8
-
-        self.shader_files = {}
-        for file in ("raytrace.glsl", "quad.glsl"):
-            f = open("shaders\\" + file, 'r')
-            self.shader_files[file.removesuffix(".glsl")] = f.read()
-            f.close()
-
-        self.program = self.ctx.program(
-            vertex_shader=self.shader_files["quad"],
-            fragment_shader=self.shader_files["raytrace"]
+        self.program = self.load_program(
+            vertex_shader="shaders/quad.glsl", 
+            fragment_shader="shaders/raytrace.glsl"
         )
 
-        self.update_accumulation_fbo()
-
-        self.program["resolution"].write(self.resolution)
+        self.program["resolution"].write(self.render_resolution)
         self.program["fov"] = self.camera.fov
-        self.program["skyboxLightStrength"].value = .35
+        self.program["skyboxLightStrength"].value = .67
         self.program["raysPerPixel"].value = self.rays_per_pixel
         self.program["maxBounceLimit"].value = self.max_bounce_limit
 
-        self.spheres: list[Sphere] = world1.spheres
+        self.spheres: list[Sphere] = world1.spheres.copy()
         self.program["sphereAmount"].value = len(self.spheres)
         for i, sphere in enumerate(self.spheres):
             self.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
 
+        # --- FBOs for temporal accumulation ---
+        self.fbo = self.ctx.framebuffer(
+            color_attachments=self.ctx.texture(self.window_size, 4)
+        )
+        self.fbo_prev = self.ctx.framebuffer(
+            color_attachments=self.ctx.texture(self.window_size, 4)
+        )
+
+        self.imgui.register_texture(self.fbo.color_attachments[0])
+        self.imgui.register_texture(self.fbo_prev.color_attachments[0])
+
         self.vao = self.ctx.vertex_array(self.program, [])
+
+    def update_uniforms(self):
+        self.program["resolution"].write(self.render_resolution)
+        self.program["fov"] = self.camera.fov
+
+        self.program["forward"].write(self.camera.forward)
+        self.program["right"].write(self.camera.right)
+        self.program["up"].write(self.camera.up)
+        self.program["position"].write(self.camera.position)
+
+        self.program["raysPerPixel"].value = self.rays_per_pixel
+        self.program["maxBounceLimit"].value = self.max_bounce_limit
+
+        # Temporal accumulation uniforms
+        self.program["prev"].value = 0  # Texture unit 0
+        self.fbo_prev.color_attachments[0].use(location=0)
+        self.program["accumulationFrame"].value = self.accumulation_frame
+
+        self.program["sphereAmount"].value = len(self.spheres)
+
+
+    def on_render(self, time: float, frametime: float):
+        self.delta_time = frametime
+        self.running_time = time
+
+        # Bind previous frame texture to shader
+        self.program["prev"].value = 0
+        self.fbo_prev.color_attachments[0].use(location=0)
+        self.program["accumulationFrame"].value = self.accumulation_frame
+
+        self.fbo.use()
+        self.fbo.clear()
+
+        self.update_camera_movement()
+
+        self.camera.update()
+
+        self.update_uniforms()
+
+        if self.allow_accumulation:
+            self.accumulation_time += self.delta_time
+            self.accumulation_time *= bool(self.accumulation_frame) # Reset if no accumulation frames
+            self.accumulation_frame += 1
+        else:
+            self.accumulation_frame = 0
+            self.accumulation_time = 0.0
+
+        self.vao.render(vertices=6)
+
+        # Swap FBOs for next frame
+        self.fbo, self.fbo_prev = self.fbo_prev, self.fbo
+
+        # Only show the latest result in the UI
+        self.wnd.use()
+        self.render_ui()
+
+    def update_camera_movement(self):
+        move = vec3(0)
+        if self.wnd.is_key_pressed(self.wnd.keys.W):
+            move += vec3(0, 0, 1)
+        if self.wnd.is_key_pressed(self.wnd.keys.S):
+            move += vec3(0, 0, -1)
+        if self.wnd.is_key_pressed(self.wnd.keys.A):
+            move += vec3(-1, 0, 0)
+        if self.wnd.is_key_pressed(self.wnd.keys.D):
+            move += vec3(1, 0, 0)
+        if glm.length(move) < 1e-6:
+            return 
+        self.accumulation_frame = 0 
+        move = glm.normalize(move)
+        if self.wnd.is_key_pressed(self.wnd.keys.LEFT_SHIFT):
+            move *= self.camera.sprint_speed_multiplier if self.camera.allow_sprint else 1
+        self.camera.move_forward(move)
+
+
+    def render_ui(self):
+        imgui.new_frame()
+
+        # 1. Draw the raytraced frame as a background
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (0, 0))
+        imgui.set_next_window_position(0, 0)
+        imgui.set_next_window_size(*self.window_size)
+        imgui.begin(
+            "Background",
+            False,
+            imgui.WINDOW_NO_TITLE_BAR
+            | imgui.WINDOW_NO_MOVE
+            | imgui.WINDOW_NO_SCROLLBAR
+            | imgui.WINDOW_NO_COLLAPSE
+            | imgui.WINDOW_NO_SAVED_SETTINGS
+            | imgui.WINDOW_NO_INPUTS
+            | imgui.WINDOW_NO_BRING_TO_FRONT_ON_FOCUS
+            | imgui.WINDOW_NO_BACKGROUND
+        )
+        imgui.image(self.fbo.color_attachments[0].glo, *self.window_size)
+        imgui.end()
+        imgui.pop_style_var()
+
+        # --- LEFT SIDEBAR ---
+        imgui.set_next_window_position(0, 0)
+        imgui.set_next_window_size(self.SIDEBAR_WIDTH, self.window_size[1])
+        imgui.begin(
+            "##Sidebar",  # No header/title bar
+            False,
+            imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_SAVED_SETTINGS | imgui.WINDOW_NO_MOVE
+        )
+
+        # Collapsible Raytracer Settings
+        if imgui.collapsing_header("Raytracer Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+            imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+            _, self.rays_per_pixel = imgui.slider_int(
+                "Rays/Pixel", self.rays_per_pixel, 1, 20
+            )
+            imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+            _, self.max_bounce_limit = imgui.slider_int(
+                "Max Bounces", self.max_bounce_limit, 1, 4
+            )
+            imgui.text(f"MSPF: {(self.delta_time * 1000):.0f} ms")
+            imgui.text(f"Accumulation time: {self.accumulation_time:.2f}s")
+            _, self.allow_accumulation = imgui.checkbox(
+                "Allow Accumulation", self.allow_accumulation
+            )
+
+        # Collapsible World Settings
+        if imgui.collapsing_header("World Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+            remove_indices = []
+            for i, sphere in enumerate(self.spheres):
+                if self.render_sphere_editor(sphere, i):
+                    remove_indices.append(i)
+
+            # Remove spheres after iteration to avoid index issues
+            for idx in reversed(remove_indices):
+                del self.spheres[idx]
+                self.accumulation_frame = 0
+
+            if remove_indices:
+                self.program["sphereAmount"].value = len(self.spheres)
+                for i, sphere in enumerate(self.spheres):
+                    self.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
+
+        if imgui.button("Add Sphere"):
+            from dclasses import Sphere, Material  # Ensure import at top of file
+            self.spheres.append(Sphere(center=vec3(0,0,0), radius=1.0, material=Material()))
+            self.accumulation_frame = 0
+            self.load_dataclass_to_uniform(self.spheres[-1], f"spheres[{len(self.spheres) - 1}]")
+
+        if imgui.button("Print all"):
+            print(self.spheres)
+
+        imgui.end()
+
+        # --- RIGHT SIDEBAR ---
+        right_x = self.window_size[0] - self.SIDEBAR_WIDTH
+        imgui.set_next_window_position(right_x, 0)
+        imgui.set_next_window_size(self.SIDEBAR_WIDTH, self.window_size[1])
+        imgui.begin(
+            "##CameraSidebar",  # No header/title bar
+            False,
+            imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_SAVED_SETTINGS | imgui.WINDOW_NO_MOVE
+        )
+
+        # Collapsible Camera Controls
+        if imgui.collapsing_header("Camera Controls", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+            imgui.text(
+                f"Position: ({self.camera.position.x:6.2f}, {self.camera.position.y:6.2f}, {self.camera.position.z:6.2f})"
+            )
+            imgui.text(
+                f"Forward:  ({self.camera.forward.x:6.2f}, {self.camera.forward.y:6.2f}, {self.camera.forward.z:6.2f})"
+            )
+            imgui.set_next_item_width(120)
+            changed, self.camera.fov = imgui.slider_float(
+                "Field of View", self.camera.fov, 30.0, 90.0
+            )
+            if changed:
+                self.accumulation_frame = 0
+            imgui.set_next_item_width(120)
+            _, self.camera.sensitivity = imgui.slider_float(
+                "Mouse Sensitivity", self.camera.sensitivity, 0.05, 0.4
+            )
+            imgui.set_next_item_width(120)
+            _, self.camera.movement_speed = imgui.drag_float(
+                "Movement Speed", self.camera.movement_speed, 0.02, 0.5, 5.0, format="%.2f"
+            )
+            _, self.camera.allow_sprint = imgui.checkbox(
+                "Allow Sprint", self.camera.allow_sprint
+            )
+            imgui.set_next_item_width(120)
+            _, self.camera.sprint_speed_multiplier = imgui.drag_float(
+                "Sprint Speed Multiplier", self.camera.sprint_speed_multiplier, 0.05, 2.0, 20.0, format="%.2f"
+            )
+
+        imgui.end()
+        imgui.render()
+        self.imgui.render(imgui.get_draw_data())
+
+    def render_sphere_editor(self, sphere: Sphere, index: int) -> bool:
+        if not imgui.tree_node(f"Sphere {index}"):
+            return False # No changes if tree node is not expanded
+        
+        imgui.push_id(str(index))
+        # --- Position ---
+        imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+        center_changed, *new_center = imgui.drag_float3(
+            "Center", *tuple(sphere.center), 0.01, format="%.2f"
+        )
+        if center_changed:
+            sphere.center = vec3(*new_center)
+            self.program[f"spheres[{index}].center"].write(sphere.center)
+            self.accumulation_frame = 0
+
+        # --- Radius ---
+        imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+        radius_changed, sphere.radius = imgui.drag_float(
+            f"Radius", sphere.radius, 0.01, 0, 100.0, format="%.2f"
+        )
+        if radius_changed:
+            self.program[f"spheres[{index}].radius"].value = sphere.radius
+            self.accumulation_frame = 0
+
+        # --- Material ---
+        # Color (RGB sliders)
+        imgui.set_next_item_width(50)
+        changed_col_r, sphere.material.color.x = imgui.slider_float("R", sphere.material.color.x, 0.0, 1.0, format="%.2f")
+        imgui.same_line()
+        imgui.set_next_item_width(50)
+        changed_col_g, sphere.material.color.y = imgui.slider_float("G", sphere.material.color.y, 0.0, 1.0, format="%.2f")
+        imgui.same_line()
+        imgui.set_next_item_width(50)
+        changed_col_b, sphere.material.color.z = imgui.slider_float("B", sphere.material.color.z, 0.0, 1.0, format="%.2f")
+        if changed_col_r or changed_col_g or changed_col_b:
+            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+            self.accumulation_frame = 0
+        # Smoothness
+        changed_smooth, sphere.material.smoothness = imgui.slider_float("Smoothness", sphere.material.smoothness, 0.0, 1.0, format="%.2f")
+        if changed_smooth:
+            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+            self.accumulation_frame = 0
+        # Emission Color (RGB sliders)
+        imgui.text("Emission Color:")
+        imgui.set_next_item_width(50)
+        changed_em_r, sphere.material.emissionColor.x = imgui.slider_float("ER", sphere.material.emissionColor.x, 0.0, 1.0, format="%.2f")
+        imgui.same_line()
+        imgui.set_next_item_width(50)
+        changed_em_g, sphere.material.emissionColor.y = imgui.slider_float("EG", sphere.material.emissionColor.y, 0.0, 1.0, format="%.2f")
+        imgui.same_line()
+        imgui.set_next_item_width(50)
+        changed_em_b, sphere.material.emissionColor.z = imgui.slider_float("EB", sphere.material.emissionColor.z, 0.0, 1.0, format="%.2f")
+        if changed_em_r or changed_em_g or changed_em_b:
+            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+            self.accumulation_frame = 0
+        # Emission Strength
+        changed_em_strength, sphere.material.emissionStrength = imgui.drag_float("Emission Strength", sphere.material.emissionStrength, 0.01, 1, format="%.2f")
+        if changed_em_strength:
+            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+
+            self.accumulation_frame = 0
+        imgui.pop_id()  # <-- This is required!
+
+                            # Remove button
+        remove = imgui.button(f"Remove##{index}")  # Indicate that this sphere should be removed
+        imgui.tree_pop()
+        return remove
 
     def load_dataclass_to_uniform(self, dclass, uniform_name: str):
         for key, value in dclass.__dict__.items():
@@ -76,112 +338,49 @@ class App(object):
             if is_dataclass(value):
                 self.load_dataclass_to_uniform(value, addr)
             else:
+                # print(f"Setting uniform {addr} to {value}")
                 self.program[addr].value = value
-    
-    def update_sphere(self, index: int):
-        self.load_dataclass_to_uniform(self.spheres[index], f"spheres[{index}]")
 
-    def update_accumulation_fbo(self):
-        self.continue_frame_accumulaion = True
-        self.accumulation_frame = 0
-        self.frame_render_time = 0.0
+    def on_resize(self, width: int, height: int):
+        self.window_size = width, height
+        self.render_resolution = vec2(self.window_size)
 
-        self.previous_frame_texture = self.ctx.texture(self.resolution_tuple, 4)
-        self.previous_frame = self.ctx.framebuffer(self.previous_frame_texture)
+        self.fbo = self.ctx.framebuffer(
+            color_attachments=self.ctx.texture(self.window_size, 4)
+        )
+        self.fbo_prev = self.ctx.framebuffer(
+            color_attachments=self.ctx.texture(self.window_size, 4)
+        )
+        self.imgui.register_texture(self.fbo.color_attachments[0])
+        self.imgui.register_texture(self.fbo_prev.color_attachments[0])
+        self.imgui.resize(width, height)
+        self.accumulation_frame = 0  # Reset accumulation on resize
 
-    def update(self):
-        self.camera.update()
+    def on_key_event(self, key, action, modifiers):
 
-        self.continue_frame_accumulaion = self.continue_frame_accumulaion and not self.camera.moved
+        self.imgui.key_event(key, action, modifiers)
 
-        self.accumulation_frame *= self.continue_frame_accumulaion
-        self.frame_render_time *= self.continue_frame_accumulaion
+    def on_mouse_position_event(self, x, y, dx, dy):
+        self.imgui.mouse_position_event(x, y, dx, dy)
 
-        self.accumulation_frame += 1
-        self.frame_render_time += self.delta_time
+    def on_mouse_drag_event(self, x, y, dx, dy):
+        if not imgui.get_io().want_capture_mouse:
+            self.accumulation_frame *= not dx and not dy
+            self.camera.rotate(dx * self.camera.sensitivity, -dy * self.camera.sensitivity)
+        self.imgui.mouse_drag_event(x, y, dx, dy)
 
+    def on_mouse_scroll_event(self, x_offset, y_offset):
+        self.imgui.mouse_scroll_event(x_offset, y_offset)
 
-        self.max_bounce_limit = glm.clamp(self.max_bounce_limit, 0, 16)
+    def on_mouse_press_event(self, x, y, button):
+        self.imgui.mouse_press_event(x, y, button)
 
-        self.update_uniforms()
+    def on_mouse_release_event(self, x: int, y: int, button: int):
+        self.imgui.mouse_release_event(x, y, button)
 
-        self.vao.render(vertices=6)
-
-        self.ctx.copy_framebuffer(self.previous_frame, self.ctx.screen)
-        self.ctx.copy_framebuffer(self.previous_frame_texture, self.previous_frame)
-
-        self.continue_frame_accumulaion = True
-
-    def update_uniforms(self):
-        self.program["resolution"].write(self.resolution)
-        self.program["fov"] = self.camera.fov
-        
-        self.program["forward"].write(self.camera.forward)
-        self.program["right"].write(self.camera.right)
-        self.program["up"].write(self.camera.up)
-        self.program["position"].write(self.camera.position)
-        
-        self.previous_frame_texture.use(location=0)
-        self.program["prev"] = 0
-        self.program["accumulationFrame"].value = self.accumulation_frame
-
-        self.program["raysPerPixel"].value = self.rays_per_pixel
-        self.program["maxBounceLimit"].value = self.max_bounce_limit
-
-
-    def handle_events(self):
-        for event in pg.event.get():
-            if event.type == QUIT:
-                self.stop()
-            if event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    self.stop()
-                if event.key == K_UP:
-                    self.max_bounce_limit += 1
-                    self.continue_frame_accumulaion = False
-                if event.key == K_DOWN:
-                    self.max_bounce_limit -= 1
-                    self.continue_frame_accumulaion = False
-            if event.type == VIDEORESIZE:
-                w, h = event.size
-                pg.display.set_mode((w, h), DOUBLEBUF | OPENGL | RESIZABLE)
-                self.resolution_tuple = (w, h)
-                self.resolution = vec2(w, h)
-                self.update_accumulation_fbo()
-                self.ctx.viewport = (0, 0, w, h)
-
-    def debug(self):
-        ... # This is where you would implement your debug functionality
-
-
-    def run(self, debug=False):
-        while True:
-            self.delta_time = self.clock.tick() / 1000.0 # Clock.tick() returns miliseconds
-            self.running_time += self.delta_time
-            self.fps_est = self.clock.get_fps()
-
-            self.keys = pg.key.get_pressed()
-            self.mouse_rel = pg.mouse.get_rel()
-            self.mouse_inputs = pg.mouse.get_pressed()
-
-            self.handle_events()
-            
-            pg.display.set_caption(
-                f"Fps: {self.fps_est:.1f}  Current frame render time: {self.frame_render_time:.2f}s"
-            )
-
-            if debug: self.debug()
-
-            self.update()
-
-            pg.display.flip()
-            self.ctx.clear(0, 0, 0)
-
-
-    def stop(self):
-        exit()
+    def on_unicode_char_entered(self, char):
+        self.imgui.unicode_char_entered(char)
 
 
 if __name__ == "__main__":
-    app = App()
-    app.run(debug=True)
+    WindowEvents.run()

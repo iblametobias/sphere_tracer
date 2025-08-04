@@ -195,6 +195,7 @@ void main() {
     vec2 uv = gl_FragCoord.xy / resolution;
     vec2 ndc = uv * 2.0 - 1.0; // [-1,1]
     ndc.x *= aspect;
+    ndc.y *= -1.0; // Invert y-axis for OpenGL
 
     float focalLength = 1 / tan(radians(fov) * 0.5);
     vec3 baseRayDirection = vec3(ndc, focalLength);
@@ -217,7 +218,7 @@ void main() {
 
     light = ACESFilm(light);
 
-    vec3 color = mix(texture(prev, uv).rgb, light, 1 / float(accumulationFrame));
+    vec3 color = mix(texture(prev, uv).rgb, light, 1 / float(accumulationFrame + 1));
 
     fragment = vec4(color, 1);
 }

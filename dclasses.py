@@ -6,9 +6,9 @@ class Material:
     """
     Represents the Material struct in the shader 
     """
-    color: vec3 = vec3(0)
+    color: vec3 = field(default_factory=lambda: vec3(0))
     smoothness: float = 0
-    emissionColor: vec3 = vec3(0)
+    emissionColor: vec3 = field(default_factory=lambda: vec3(0))
     emissionStrength: float = 0.0
 
 

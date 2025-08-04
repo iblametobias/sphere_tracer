@@ -1,9 +1,7 @@
-from pyglm.glm import vec3, cross, normalize, length
+from pyglm.glm import vec3, mat3
+from pyglm.glm import cross, normalize, length
 from pyglm.glm import sin, cos, radians
 from pyglm.glm import clamp
-
-from pygame.locals import *
-from pygame import key, mouse
 
 class Camera:
     def __init__(self, app, position: vec3, fov: float, yaw: float, pitch: float):
@@ -21,9 +19,14 @@ class Camera:
         self.fov = fov
 
         self.movement_speed = 5
-        self.sensitivity = 0.005
+        self.sensitivity = 0.1
+
+        self.allow_sprint = True
+        self.sprint_speed_multiplier = 5
 
         self.moved = False
+
+        self.update()
 
     def update(self):
         self.pitch = clamp(self.pitch, -self.MAX_PITCH, self.MAX_PITCH)
@@ -36,35 +39,12 @@ class Camera:
         self.right = normalize(cross(self.forward, vec3(0, 1, 0)))
         self.up = normalize(cross(self.right, self.forward))
 
-        self.update_movement()
+        self.m_rotation = mat3(self.right, self.up, self.forward)
 
-    def update_movement(self):
-        rotation_speed = self.sensitivity * self.app.mouse_inputs[0]
-        self.yaw += self.app.mouse_rel[0] * rotation_speed 
-        self.pitch -= self.app.mouse_rel[1] * rotation_speed
-        self.moved = any(self.app.mouse_rel) and self.app.mouse_inputs[0]
+    def rotate(self, yaw: float, pitch: float):
+        self.yaw += radians(yaw)
+        self.pitch += radians(pitch)
 
-        keys = self.app.keys
-        direction = vec3(0)
-
-        if keys[K_w]:
-            direction += self.forward
-        if keys[K_s]:
-            direction -= self.forward
-        if keys[K_a]:
-            direction -= self.right
-        if keys[K_d]:
-            direction += self.right
-
-        if length(direction) < 1e-8:
-            return
-        
-        self.moved = True
-        
-        direction = normalize(direction)
-
-        move = self.movement_speed * self.app.delta_time * direction
-        if keys[K_LSHIFT]:
-            move *= 10
-
-        self.position += move
+    def move_forward(self, direction: vec3 = vec3(0)):
+        d_pos = self.m_rotation * direction
+        self.position += d_pos * self.movement_speed * self.app.delta_time
