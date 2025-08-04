@@ -28,8 +28,7 @@ class WindowEvents(mglw.WindowConfig):
         self.wnd.ctx.error
 
         self.imgui = ModernglWindowRenderer(self.wnd)
-        self.SIDEBAR_WIDTH = 260
-        self.DATAFIELD_WIDTH = 160
+        self.SIDEBAR_WIDTH = 270
 
         self.camera = Camera(self, vec3(7, 7, 7), 60, 225, -40)
 
@@ -178,11 +177,11 @@ class WindowEvents(mglw.WindowConfig):
 
         # Collapsible Raytracer Settings
         if imgui.collapsing_header("Raytracer Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
-            imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+            imgui.set_next_item_width(160)
             _, self.rays_per_pixel = imgui.slider_int(
                 "Rays/Pixel", self.rays_per_pixel, 1, 20
             )
-            imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+            imgui.set_next_item_width(160)
             _, self.max_bounce_limit = imgui.slider_int(
                 "Max Bounces", self.max_bounce_limit, 1, 4
             )
@@ -238,24 +237,24 @@ class WindowEvents(mglw.WindowConfig):
             imgui.text(
                 f"Forward:  ({self.camera.forward.x:6.2f}, {self.camera.forward.y:6.2f}, {self.camera.forward.z:6.2f})"
             )
-            imgui.set_next_item_width(120)
+            imgui.set_next_item_width(160)
             changed, self.camera.fov = imgui.slider_float(
-                "Field of View", self.camera.fov, 30.0, 90.0
+                "FOV", self.camera.fov, 30.0, 90.0
             )
             if changed:
                 self.accumulation_frame = 0
-            imgui.set_next_item_width(120)
+            imgui.set_next_item_width(160)
             _, self.camera.sensitivity = imgui.slider_float(
-                "Mouse Sensitivity", self.camera.sensitivity, 0.05, 0.4
+                "Sensitivity", self.camera.sensitivity, 0.05, 0.4
             )
-            imgui.set_next_item_width(120)
+            imgui.set_next_item_width(100)
             _, self.camera.movement_speed = imgui.drag_float(
                 "Movement Speed", self.camera.movement_speed, 0.02, 0.5, 5.0, format="%.2f"
             )
             _, self.camera.allow_sprint = imgui.checkbox(
                 "Allow Sprint", self.camera.allow_sprint
             )
-            imgui.set_next_item_width(120)
+            imgui.set_next_item_width(100)
             _, self.camera.sprint_speed_multiplier = imgui.drag_float(
                 "Sprint Speed Multiplier", self.camera.sprint_speed_multiplier, 0.05, 2.0, 20.0, format="%.2f"
             )
@@ -270,7 +269,7 @@ class WindowEvents(mglw.WindowConfig):
         
         imgui.push_id(str(index))
         # --- Position ---
-        imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+        imgui.set_next_item_width(160)
         center_changed, *new_center = imgui.drag_float3(
             "Center", *tuple(sphere.center), 0.01, format="%.2f"
         )
@@ -280,7 +279,7 @@ class WindowEvents(mglw.WindowConfig):
             self.accumulation_frame = 0
 
         # --- Radius ---
-        imgui.set_next_item_width(self.DATAFIELD_WIDTH)
+        imgui.set_next_item_width(160)
         radius_changed, sphere.radius = imgui.drag_float(
             f"Radius", sphere.radius, 0.01, 0, 100.0, format="%.2f"
         )
@@ -290,45 +289,44 @@ class WindowEvents(mglw.WindowConfig):
 
         # --- Material ---
         # Color (RGB sliders)
-        imgui.set_next_item_width(50)
-        changed_col_r, sphere.material.color.x = imgui.slider_float("R", sphere.material.color.x, 0.0, 1.0, format="%.2f")
-        imgui.same_line()
-        imgui.set_next_item_width(50)
-        changed_col_g, sphere.material.color.y = imgui.slider_float("G", sphere.material.color.y, 0.0, 1.0, format="%.2f")
-        imgui.same_line()
-        imgui.set_next_item_width(50)
-        changed_col_b, sphere.material.color.z = imgui.slider_float("B", sphere.material.color.z, 0.0, 1.0, format="%.2f")
-        if changed_col_r or changed_col_g or changed_col_b:
-            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+        imgui.set_next_item_width(160)
+        color_changed, *new_color = imgui.color_edit3(
+            "Albedo", *tuple(sphere.material.color)
+        )
+        if color_changed:
+            sphere.material.color = vec3(*new_color)
+            self.program[f"spheres[{index}].material.color"].write(sphere.material.color)
             self.accumulation_frame = 0
         # Smoothness
-        changed_smooth, sphere.material.smoothness = imgui.slider_float("Smoothness", sphere.material.smoothness, 0.0, 1.0, format="%.2f")
+        imgui.set_next_item_width(160)
+        changed_smooth, sphere.material.smoothness = imgui.slider_float(
+            "Smoothness", sphere.material.smoothness, 0.0, 1.0, format="%.2f"
+        )
         if changed_smooth:
-            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+            self.program[f"spheres[{index}].material.smoothness"].value = (sphere.material.smoothness)
             self.accumulation_frame = 0
         # Emission Color (RGB sliders)
-        imgui.text("Emission Color:")
-        imgui.set_next_item_width(50)
-        changed_em_r, sphere.material.emissionColor.x = imgui.slider_float("ER", sphere.material.emissionColor.x, 0.0, 1.0, format="%.2f")
-        imgui.same_line()
-        imgui.set_next_item_width(50)
-        changed_em_g, sphere.material.emissionColor.y = imgui.slider_float("EG", sphere.material.emissionColor.y, 0.0, 1.0, format="%.2f")
-        imgui.same_line()
-        imgui.set_next_item_width(50)
-        changed_em_b, sphere.material.emissionColor.z = imgui.slider_float("EB", sphere.material.emissionColor.z, 0.0, 1.0, format="%.2f")
-        if changed_em_r or changed_em_g or changed_em_b:
-            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
+        imgui.set_next_item_width(160)
+        emission_changed, *new_emission = imgui.color_edit3(
+            "Emission", *tuple(sphere.material.emissionColor)
+        )
+        if emission_changed:
+            sphere.material.emissionColor = vec3(*new_emission)
+            self.program[f"spheres[{index}].material.emissionColor"].write(sphere.material.emissionColor)
             self.accumulation_frame = 0
         # Emission Strength
-        changed_em_strength, sphere.material.emissionStrength = imgui.drag_float("Emission Strength", sphere.material.emissionStrength, 0.01, 1, format="%.2f")
+        imgui.set_next_item_width(160)
+        changed_em_strength, sphere.material.emissionStrength = imgui.drag_float(
+            "Brightness", sphere.material.emissionStrength, 0.01, 0, 5, format="%.2f"
+        )
         if changed_em_strength:
-            self.load_dataclass_to_uniform(sphere, f"spheres[{index}]")
-
+            self.program[f"spheres[{index}].material.emissionStrength"].value = (sphere.material.emissionStrength)
             self.accumulation_frame = 0
-        imgui.pop_id()  # <-- This is required!
 
-                            # Remove button
-        remove = imgui.button(f"Remove##{index}")  # Indicate that this sphere should be removed
+        imgui.pop_id() 
+
+        # Remove button
+        remove = imgui.button(f"Remove##{index}")
         imgui.tree_pop()
         return remove
 
