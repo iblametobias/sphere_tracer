@@ -45,14 +45,7 @@ class WindowEvents(mglw.WindowConfig):
             fragment_shader="shaders/raytrace.glsl"
         )
 
-        self.program["resolution"].write(self.render_resolution)
-        self.program["fov"] = self.camera.fov
-        self.program["skyboxLightStrength"].value = .67
-        self.program["raysPerPixel"].value = self.rays_per_pixel
-        self.program["maxBounceLimit"].value = self.max_bounce_limit
-
         self.spheres: list[Sphere] = world1.spheres.copy()
-        self.program["sphereAmount"].value = len(self.spheres)
         for i, sphere in enumerate(self.spheres):
             self.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
 
@@ -66,6 +59,9 @@ class WindowEvents(mglw.WindowConfig):
 
         self.imgui.register_texture(self.fbo.color_attachments[0])
         self.imgui.register_texture(self.fbo_prev.color_attachments[0])
+
+        self.program["skyboxLightStrength"].value = .67
+        self.update_uniforms()
 
         self.vao = self.ctx.vertex_array(self.program, [])
 
@@ -239,7 +235,7 @@ class WindowEvents(mglw.WindowConfig):
             )
             imgui.set_next_item_width(160)
             changed, self.camera.fov = imgui.slider_float(
-                "FOV", self.camera.fov, 30.0, 90.0
+                "FOV", self.camera.fov, 30.0, 90.0, format="%.0f"
             )
             if changed:
                 self.accumulation_frame = 0
