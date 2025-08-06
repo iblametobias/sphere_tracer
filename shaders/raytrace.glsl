@@ -218,7 +218,7 @@ void main() {
 
     light = ACESFilm(light);
 
-    vec3 color = mix(texture(prev, uv).rgb, light, 1 / float(accumulationFrame + 1));
+    vec3 color = mix(texture(prev, uv).rgb, light, 1 / float(accumulationFrame));
 
     fragment = vec4(color, 1);
 }
