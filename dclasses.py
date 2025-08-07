@@ -1,4 +1,4 @@
-from pyglm.glm import vec3
+from glm import vec3
 from dataclasses import dataclass, field
 
 @dataclass

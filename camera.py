@@ -1,7 +1,7 @@
-from pyglm.glm import vec3, mat3
-from pyglm.glm import cross, normalize, length
-from pyglm.glm import sin, cos, radians
-from pyglm.glm import clamp
+from glm import vec3, mat3
+from glm import cross, normalize
+from glm import sin, cos, radians
+from glm import clamp
 
 class Camera:
     def __init__(self, app, position: vec3, fov: float, yaw: float, pitch: float):

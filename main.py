@@ -7,6 +7,7 @@ from glm import vec2, vec3
 
 from dataclasses import is_dataclass
 from pathlib import Path
+from pickle import load, dump
 
 from camera import Camera
 from ui import UI
@@ -17,6 +18,7 @@ import world1
 class App(mglw.WindowConfig):
     gl_version = (4, 6)
     window_size = (1600, 900)
+    title = "Raytracer"
     aspect_ratio = None
     resizable = True
     resource_dir = Path(__file__).parent
@@ -35,13 +37,12 @@ class App(mglw.WindowConfig):
         # Vertex Array Object for the fullscreen quad displaying the raytraced render
         self.vao = self.ctx.vertex_array(self.program, [])
 
+        self.SIDEBAR_WIDTH = 270
+
         # Initialize camera and UI objects
         self.ui = UI(self)
         self.ui_renderer = ModernglWindowRenderer(self.wnd)
         self.camera = Camera(self, vec3(7, 7, 7), 60, 225, -40)
-        
-        # Constants
-        self.SIDEBAR_WIDTH = 270 # its just one constant ;-;
 
         # CPU-side variables
         self.render_resolution = vec2(self.window_size)
@@ -52,9 +53,8 @@ class App(mglw.WindowConfig):
         self.accumulation_frame = 0 
         self.accumulation_time = 0.0 
 
-        self.spheres: list[Sphere] = world1.spheres.copy()
-        for i, sphere in enumerate(self.spheres):
-            self.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
+        # Load default world
+        self.load_world("Default World")
 
         # Framebuffers for temporal accumulation
         self.fbo = self.ctx.framebuffer(
@@ -68,13 +68,17 @@ class App(mglw.WindowConfig):
         self.ui_renderer.register_texture(self.fbo_prev.color_attachments[0])
 
         # Initialize uniforms
-        self.program["skyboxLightStrength"].value = .67
         self.update_uniforms()
 
 
     def update_uniforms(self):
         """Updates all uniforms except for spheres."""
 
+        # World
+        self.program["skyboxLightStrength"].value = self.skyBoxLightStrength
+        self.program["sphereAmount"].value = len(self.spheres)
+
+        # Simulation
         self.program["resolution"].write(self.render_resolution)
         self.program["fov"] = self.camera.fov
 
@@ -90,7 +94,29 @@ class App(mglw.WindowConfig):
         self.program["prev"].value = 0
         self.program["accumulationFrame"].value = self.accumulation_frame
 
+    def load_world(self, filename: str):
+        """Loads a world from a file."""
+        path = self.resource_dir / "worlds" / f"{filename}.world"   
+        if not path.exists():
+            print(f"World file {path} does not exist.")
+            return
+        with open(path, "rb") as f:
+            self.spheres, self.skyBoxLightStrength = load(f)
+
+        self.reset_accumulation()
+        
         self.program["sphereAmount"].value = len(self.spheres)
+        for i, sphere in enumerate(self.spheres):
+            self.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
+
+    def save_world(self, filename: str):
+        """Saves the current world to a file."""
+        path = self.resource_dir / "worlds" / f"{filename}.world"
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            dump((self.spheres, self.skyBoxLightStrength), f)
+        print(f"World saved to {path}")
 
     def on_render(self, time: float, frametime: float):
         self.delta_time = frametime
@@ -103,7 +129,7 @@ class App(mglw.WindowConfig):
         self.update_camera_movement()
         self.camera.update()
         self.update_accumulation()
-
+  
         # Update the GPU side
         self.update_uniforms()
 

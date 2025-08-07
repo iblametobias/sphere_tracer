@@ -1,11 +1,11 @@
 import imgui
 from glm import vec3
-from dclasses import Sphere
+from dclasses import Sphere, Material
 
 
 class UI:
     """
-    Handles the only the UI generation
+    Handles the the UI
     """
     def __init__(self, app):
         self.app = app
@@ -13,7 +13,36 @@ class UI:
     def generate_frame(self):
         imgui.new_frame()
 
-        # 1. Draw the raytraced frame as a background
+        self._raytraced_frame()
+
+        self._sidebar("left", [
+            self._raytracer_settings,
+            self._world_settings
+        ])
+
+        self._sidebar("right", [
+            self._camera_controls
+        ])
+
+        imgui.render()
+
+    def _sidebar(self, position: str, contents: list[callable]):
+        pos_x = 0 if position == "left" else self.app.window_size[0] - self.app.SIDEBAR_WIDTH
+
+        imgui.set_next_window_position(pos_x, 0)
+        imgui.set_next_window_size(self.app.SIDEBAR_WIDTH, self.app.window_size[1])
+        imgui.begin(
+            "##Sidebar" + position,  # No header/title bar
+            False,
+            imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_SAVED_SETTINGS | imgui.WINDOW_NO_MOVE
+        )
+
+        for content in contents:
+            content()
+
+        imgui.end()
+
+    def _raytraced_frame(self):
         imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (0, 0))
         imgui.set_next_window_position(0, 0)
         imgui.set_next_window_size(*self.app.window_size)
@@ -33,50 +62,58 @@ class UI:
         imgui.end()
         imgui.pop_style_var()
 
-        # --- LEFT SIDEBAR ---
-        imgui.set_next_window_position(0, 0)
-        imgui.set_next_window_size(self.app.SIDEBAR_WIDTH, self.app.window_size[1])
-        imgui.begin(
-            "##Sidebar",  # No header/title bar
-            False,
-            imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_SAVED_SETTINGS | imgui.WINDOW_NO_MOVE
+    def _raytracer_settings(self):
+        if not imgui.collapsing_header("Raytracer Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]: return
+
+        imgui.set_next_item_width(160)
+        _, self.app.rays_per_pixel = imgui.slider_int(
+            "Rays/Pixel", self.app.rays_per_pixel, 1, 32
+        )
+        imgui.set_next_item_width(160)
+        _, self.app.max_bounce_limit = imgui.slider_int(
+            "Max Bounces", self.app.max_bounce_limit, 1, 12
+        )
+        imgui.text(f"MSPF: {(self.app.delta_time * 1000):.0f} ms")
+        imgui.text(f"Accumulation time: {self.app.accumulation_time:.2f}s")
+        _, self.app.allow_accumulation = imgui.checkbox(
+            "Allow Accumulation", self.app.allow_accumulation
         )
 
-        # Collapsible Raytracer Settings
-        if imgui.collapsing_header("Raytracer Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
-            imgui.set_next_item_width(160)
-            _, self.app.rays_per_pixel = imgui.slider_int(
-                "Rays/Pixel", self.app.rays_per_pixel, 1, 20
-            )
-            imgui.set_next_item_width(160)
-            _, self.app.max_bounce_limit = imgui.slider_int(
-                "Max Bounces", self.app.max_bounce_limit, 1, 4
-            )
-            imgui.text(f"MSPF: {(self.app.delta_time * 1000):.0f} ms")
-            imgui.text(f"Accumulation time: {self.app.accumulation_time:.2f}s")
-            _, self.app.allow_accumulation = imgui.checkbox(
-                "Allow Accumulation", self.app.allow_accumulation
-            )
+    def _world_settings(self):
+        if not imgui.collapsing_header("World Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]: return
 
-        # Collapsible World Settings
-        if imgui.collapsing_header("World Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
-            remove_indices = []
+        _, filename = imgui.input_text("World Name", "Default World")
+
+        if imgui.button("Load World"):
+            self.app.load_world(filename)
+
+        imgui.same_line()
+        if imgui.button("Save World"):
+            self.app.save_world(filename)
+
+        changed_skybox, self.app.skyBoxLightStrength = imgui.slider_float(
+            "Skybox Light Strength",
+            self.app.skyBoxLightStrength,
+            0.0, 1.0, format="%.2f"
+        )
+        if changed_skybox:
+            self.app.reset_accumulation()
+
+        remove_indices = []
+        for i, sphere in enumerate(self.app.spheres):
+            if self._sphere_editor(sphere, i):
+                remove_indices.append(i)
+
+        for idx in reversed(remove_indices):
+            del self.app.spheres[idx]
+            self.app.reset_accumulation()
+
+        if remove_indices:
+            self.app.program["sphereAmount"].value = len(self.app.spheres)
             for i, sphere in enumerate(self.app.spheres):
-                if self._render_sphere_editor(sphere, i):
-                    remove_indices.append(i)
-
-            # Remove spheres after iteration to avoid index issues
-            for idx in reversed(remove_indices):
-                del self.app.spheres[idx]
-                self.app.reset_accumulation()
-
-            if remove_indices:
-                self.app.program["sphereAmount"].value = len(self.app.spheres)
-                for i, sphere in enumerate(self.app.spheres):
-                    self.app.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
+                self.app.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
 
         if imgui.button("Add Sphere"):
-            from dclasses import Sphere, Material  # Ensure import at top of file
             self.app.spheres.append(Sphere(center=vec3(0,0,0), radius=1.0, material=Material()))
             self.app.reset_accumulation()
             self.app.load_dataclass_to_uniform(self.app.spheres[-1], f"spheres[{len(self.app.spheres) - 1}]")
@@ -84,52 +121,38 @@ class UI:
         if imgui.button("Print all"):
             print(self.app.spheres)
 
-        imgui.end()
-
-        # --- RIGHT SIDEBAR ---
-        right_x = self.app.window_size[0] - self.app.SIDEBAR_WIDTH
-        imgui.set_next_window_position(right_x, 0)
-        imgui.set_next_window_size(self.app.SIDEBAR_WIDTH, self.app.window_size[1])
-        imgui.begin(
-            "##CameraSidebar",  # No header/title bar
-            False,
-            imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_SAVED_SETTINGS | imgui.WINDOW_NO_MOVE
+    def _camera_controls(self):
+        if not imgui.collapsing_header("Camera Controls", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]: return
+        
+        imgui.text(
+            f"Position: ({self.app.camera.position.x:6.2f}, {self.app.camera.position.y:6.2f}, {self.app.camera.position.z:6.2f})"
+        )
+        imgui.text(
+            f"Forward:  ({self.app.camera.forward.x:6.2f}, {self.app.camera.forward.y:6.2f}, {self.app.camera.forward.z:6.2f})"
+        )
+        imgui.set_next_item_width(160)
+        changed, self.app.camera.fov = imgui.slider_float(
+            "FOV", self.app.camera.fov, 30.0, 90.0, format="%.0f"
+        )
+        if changed:
+            self.app.reset_accumulation()
+        imgui.set_next_item_width(160)
+        _, self.app.camera.sensitivity = imgui.slider_float(
+            "Sensitivity", self.app.camera.sensitivity, 0.05, 0.4
+        )
+        imgui.set_next_item_width(100)
+        _, self.app.camera.movement_speed = imgui.drag_float(
+            "Movement Speed", self.app.camera.movement_speed, 0.02, 0.5, 5.0, format="%.2f"
+        )
+        _, self.app.camera.allow_sprint = imgui.checkbox(
+            "Allow Sprint", self.app.camera.allow_sprint
+        )
+        imgui.set_next_item_width(100)
+        _, self.app.camera.sprint_speed_multiplier = imgui.drag_float(
+            "Sprint Speed Multiplier", self.app.camera.sprint_speed_multiplier, 0.05, 2.0, 20.0, format="%.2f"
         )
 
-        # Collapsible Camera Controls
-        if imgui.collapsing_header("Camera Controls", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]:
-            imgui.text(
-                f"Position: ({self.app.camera.position.x:6.2f}, {self.app.camera.position.y:6.2f}, {self.app.camera.position.z:6.2f})"
-            )
-            imgui.text(
-                f"Forward:  ({self.app.camera.forward.x:6.2f}, {self.app.camera.forward.y:6.2f}, {self.app.camera.forward.z:6.2f})"
-            )
-            imgui.set_next_item_width(160)
-            changed, self.app.camera.fov = imgui.slider_float(
-                "FOV", self.app.camera.fov, 30.0, 90.0, format="%.0f"
-            )
-            if changed:
-                self.app.reset_accumulation()
-            imgui.set_next_item_width(160)
-            _, self.app.camera.sensitivity = imgui.slider_float(
-                "Sensitivity", self.app.camera.sensitivity, 0.05, 0.4
-            )
-            imgui.set_next_item_width(100)
-            _, self.app.camera.movement_speed = imgui.drag_float(
-                "Movement Speed", self.app.camera.movement_speed, 0.02, 0.5, 5.0, format="%.2f"
-            )
-            _, self.app.camera.allow_sprint = imgui.checkbox(
-                "Allow Sprint", self.app.camera.allow_sprint
-            )
-            imgui.set_next_item_width(100)
-            _, self.app.camera.sprint_speed_multiplier = imgui.drag_float(
-                "Sprint Speed Multiplier", self.app.camera.sprint_speed_multiplier, 0.05, 2.0, 20.0, format="%.2f"
-            )
-
-        imgui.end()
-        imgui.render()
-
-    def _render_sphere_editor(self, sphere: Sphere, index: int) -> bool:
+    def _sphere_editor(self, sphere: Sphere, index: int) -> bool:
         if not imgui.tree_node(f"Sphere {index}"):
             return False # No changes if tree node is not expanded
         
