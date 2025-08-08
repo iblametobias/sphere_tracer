@@ -15,6 +15,8 @@ class UI:
 
         self._raytraced_frame()
 
+        self._target_sphere_editor()
+
         self._sidebar("left", [
             self._raytracer_settings,
             self._world_settings
@@ -23,6 +25,7 @@ class UI:
         self._sidebar("right", [
             self._camera_controls
         ])
+
 
         imgui.render()
 
@@ -75,9 +78,11 @@ class UI:
         )
         imgui.text(f"MSPF: {(self.app.delta_time * 1000):.0f} ms")
         imgui.text(f"Accumulation time: {self.app.accumulation_time:.2f}s")
-        _, self.app.allow_accumulation = imgui.checkbox(
+        accumulation_changed, self.app.allow_accumulation = imgui.checkbox(
             "Allow Accumulation", self.app.allow_accumulation
         )
+        if accumulation_changed:
+            self.app.reset_accumulation()
 
     def _world_settings(self):
         if not imgui.collapsing_header("World Settings", flags=imgui.TREE_NODE_DEFAULT_OPEN)[0]: return
@@ -101,8 +106,14 @@ class UI:
 
         remove_indices = []
         for i, sphere in enumerate(self.app.spheres):
+            if not imgui.tree_node(f"Sphere {i}"):
+                continue
+            imgui.push_id(str(i))
             if self._sphere_editor(sphere, i):
                 remove_indices.append(i)
+                self.app.reset_accumulation()
+            imgui.pop_id()
+            imgui.tree_pop()
 
         for idx in reversed(remove_indices):
             del self.app.spheres[idx]
@@ -114,9 +125,15 @@ class UI:
                 self.app.load_dataclass_to_uniform(sphere, f"spheres[{i}]")
 
         if imgui.button("Add Sphere"):
-            self.app.spheres.append(Sphere(center=vec3(0,0,0), radius=1.0, material=Material()))
+            r = 1.0
+            new_sphere = Sphere(
+                center=self.app.camera.position + self.app.camera.forward * 2 * r, 
+                radius=r, material=Material()
+            )
+            self.app.spheres.append(new_sphere)
+            new_sphere_index = len(self.app.spheres) - 1
             self.app.reset_accumulation()
-            self.app.load_dataclass_to_uniform(self.app.spheres[-1], f"spheres[{len(self.app.spheres) - 1}]")
+            self.app.load_dataclass_to_uniform(self.app.spheres[new_sphere_index], f"spheres[{new_sphere_index}]")
 
         if imgui.button("Print all"):
             print(self.app.spheres)
@@ -153,10 +170,7 @@ class UI:
         )
 
     def _sphere_editor(self, sphere: Sphere, index: int) -> bool:
-        if not imgui.tree_node(f"Sphere {index}"):
-            return False # No changes if tree node is not expanded
-        
-        imgui.push_id(str(index))
+
         # --- Position ---
         imgui.set_next_item_width(160)
         center_changed, *new_center = imgui.drag_float3(
@@ -212,9 +226,24 @@ class UI:
             self.app.program[f"spheres[{index}].material.emissionStrength"].value = (sphere.material.emissionStrength)
             self.app.reset_accumulation()
 
-        imgui.pop_id() 
 
         # Remove button
         remove = imgui.button(f"Remove##{index}")
-        imgui.tree_pop()
         return remove
+    
+    def _target_sphere_editor(self):
+        targeted_sphere_index = self.app.target_sphere_index()
+        if targeted_sphere_index == -1: return 
+
+        imgui.begin("Targetted Sphere", True, 
+            flags=imgui.WINDOW_NO_RESIZE
+        )
+        delete = self._sphere_editor(self.app.spheres[targeted_sphere_index], targeted_sphere_index)
+        imgui.end()
+
+        if not delete: return
+        
+        self.app.reset_accumulation()
+        del self.app.spheres[targeted_sphere_index]
+        for i, sphere in enumerate(self.app.spheres):
+            self.app.load_dataclass_to_uniform(sphere, f"spheres[{i}]")

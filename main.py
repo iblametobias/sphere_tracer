@@ -2,7 +2,8 @@ import moderngl_window as mglw
 from moderngl_window.integrations.imgui import ModernglWindowRenderer
 import imgui
 
-from glm import normalize, length
+from glm import sqrt
+from glm import normalize, length, dot
 from glm import vec2, vec3
 
 from dataclasses import is_dataclass
@@ -12,7 +13,6 @@ from pickle import load, dump
 from camera import Camera
 from ui import UI
 from dclasses import Sphere
-import world1
 
 
 class App(mglw.WindowConfig):
@@ -37,6 +37,8 @@ class App(mglw.WindowConfig):
         # Vertex Array Object for the fullscreen quad displaying the raytraced render
         self.vao = self.ctx.vertex_array(self.program, [])
 
+
+        # Constants
         self.SIDEBAR_WIDTH = 270
 
         # Initialize camera and UI objects
@@ -50,8 +52,8 @@ class App(mglw.WindowConfig):
         self.max_bounce_limit = 8
 
         self.allow_accumulation = True
-        self.accumulation_frame = 0 
-        self.accumulation_time = 0.0 
+        self.accumulation_frame = 1
+        self.accumulation_time = 0.0
 
         # Load default world
         self.load_world("Default World")
@@ -60,7 +62,7 @@ class App(mglw.WindowConfig):
         self.fbo = self.ctx.framebuffer(
             color_attachments=self.ctx.texture(self.window_size, 4)
         )
-        self.fbo_prev = self.ctx.framebuffer(
+        self.fbo_prev = self.ctx.framebuffer(    
             color_attachments=self.ctx.texture(self.window_size, 4)
         )
 
@@ -129,11 +131,12 @@ class App(mglw.WindowConfig):
         self.update_camera_movement()
         self.camera.update()
         self.update_accumulation()
-  
+
         # Update the GPU side
         self.update_uniforms()
 
         # Render the scene
+        # 6 vertices for a fullscreen quad
         self.vao.render(vertices=6)
 
         # Swap FBOs for next frame
@@ -146,6 +149,7 @@ class App(mglw.WindowConfig):
 
     def update_accumulation(self):
         if not self.allow_accumulation:
+            self.reset_accumulation()
             return
         self.accumulation_frame += 1
         self.accumulation_time += self.delta_time
@@ -172,12 +176,48 @@ class App(mglw.WindowConfig):
             move *= self.camera.sprint_speed_multiplier if self.camera.allow_sprint else 1
         self.camera.move_forward(move)
 
+    def ray_sphere_intersection(self, ray_origin: vec3, ray_direction: vec3, sphere: Sphere) -> float:
+        """Returns the distance to the intersection point if the ray intersects the sphere, otherwise -1."""
+
+        offset_ray_origin = ray_origin - sphere.center
+
+        a = dot(ray_direction, ray_direction)
+        b = 2.0 * dot(offset_ray_origin, ray_direction)
+        c = dot(offset_ray_origin, offset_ray_origin) - sphere.radius * sphere.radius
+
+        discriminant = b * b - 4.0 * a * c
+
+        if discriminant >= 0.0:
+            dst = (-b - sqrt(discriminant)) / (2.0 * a)
+            if dst >= 0.0:
+                return dst
+        return -1.0
+
+    def target_sphere_index(self) -> int:
+        """Returns the index of the closest sphere to the camera ray."""
+        ray_origin = self.camera.position
+        ray_direction = self.camera.forward
+
+        closest_distance = float('inf')
+        closest_index = -1
+        for i, sphere in enumerate(self.spheres):
+            distance = self.ray_sphere_intersection(ray_origin, ray_direction, sphere)
+            if distance < 0:
+                continue
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_index = i
+
+        if closest_index == -1:
+            return -1
+
+        return closest_index
 
     def load_dataclass_to_uniform(self, dclass, uniform_name: str):
         for key, value in dclass.__dict__.items():
             addr = ".".join((uniform_name, key))
             if is_dataclass(value):
-                self.load_dataclass_to_uniform(value, addr)
+                self.load_dataclass_to_uniform(value, addr) 
             else:
                 # print(f"Setting uniform {addr} to {value}")
                 self.program[addr].value = value
