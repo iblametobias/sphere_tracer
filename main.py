@@ -6,9 +6,9 @@ from glm import sqrt
 from glm import normalize, length, dot
 from glm import vec2, vec3
 
-from dataclasses import is_dataclass
 from pathlib import Path
-from pickle import load, dump
+from pickle import load, dump  
+from dataclasses import is_dataclass
 
 from camera import Camera
 from ui import UI
@@ -27,10 +27,10 @@ class App(mglw.WindowConfig):
         # Initialize ModernGL Window and ImGui
         super().__init__(**kwargs)
         imgui.create_context()
-        self.wnd.ctx.error
+        self.wnd.ctx.error 
 
         # Compile shaders
-        self.program = self.load_program(
+        self.program =  self.load_program(
             vertex_shader="shaders/quad.glsl", 
             fragment_shader="shaders/raytrace.glsl"
         )
@@ -56,6 +56,7 @@ class App(mglw.WindowConfig):
         self.accumulation_time = 0.0
 
         # Load default world
+        self.density = 0.0
         self.load_world("Default World")
 
         # Framebuffers for temporal accumulation
@@ -77,6 +78,7 @@ class App(mglw.WindowConfig):
         """Updates all uniforms except for spheres."""
 
         # World
+        self.program["density"].value = self.density
         self.program["skyboxLightStrength"].value = self.skyBoxLightStrength
         self.program["sphereAmount"].value = len(self.spheres)
 
@@ -207,9 +209,6 @@ class App(mglw.WindowConfig):
             if distance < closest_distance:
                 closest_distance = distance
                 closest_index = i
-
-        if closest_index == -1:
-            return -1
 
         return closest_index
 

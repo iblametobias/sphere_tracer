@@ -34,6 +34,10 @@ vec3 RandDirection(inout uint state) {
     return normalize(vec3(x, y, z));
 }
 
+bool RandProbability(inout uint state, float probability) {
+    return Rand(state) < probability;
+}
+
 // Structs
 struct Ray {
     vec3 direction;
@@ -79,14 +83,15 @@ uniform vec3 position;
 uniform sampler2D prev;
 uniform int accumulationFrame;
 
-const int MAX_SPHERE_ARRAY_SIZE = 128;
+uniform float density;
+const int MAX_SPHERE_ARRAY_SIZE = 20;
 uniform int sphereAmount;
 uniform Sphere spheres[MAX_SPHERE_ARRAY_SIZE];
 
 uniform float skyboxLightStrength;
 uniform int raysPerPixel;
 uniform int maxBounceLimit;
-const float rayJitterStrength = 0.002;
+const float rayJitterStrength = 0.001;
 
 
 Hit RaySphereIntersection(Ray ray, Sphere sphere) {
@@ -120,7 +125,6 @@ Hit RaySphereIntersection(Ray ray, Sphere sphere) {
     return hit;
 }
 
-
 Hit CalculateRayCollision(Ray ray) {
     Hit closestHit;
     closestHit.happened = false;
@@ -152,29 +156,58 @@ vec3 GetEnvironmentLight(Ray ray) {
     return color * skyboxLightStrength;
 }
 
+
+float TraverseVolume(Ray from, float distance_, inout uint rngState) {
+    float rayLength = distance_;
+    float scatterPos = -log(1 - Rand(rngState)) / density;
+    return (scatterPos < rayLength) ? scatterPos : -1.0;
+}
+
+Ray BounceRayVolume(Ray ray, vec3 position, inout uint rngState) {
+    vec3 scatterDirection = RandDirection(rngState);
+    ray.origin = position;
+    ray.direction = scatterDirection;
+    // ray.direction = normalize(scatterDirection + ray.direction);
+    return ray;
+}
+
+Ray BounceRaySurface(Ray ray, Hit hit, inout uint rngState) {
+    vec3 diffuse = normalize(hit.normal + RandDirection(rngState));
+    vec3 specular = reflect(ray.direction, hit.normal);
+    ray.direction = mix(diffuse, specular, hit.material.smoothness);
+    ray.origin = hit.position;
+    return ray;
+}
+
+const int maxVolumeBounces = 2;
 vec3 Trace(Ray ray, inout uint rngState) {
     vec3 incomingLight = vec3(0);
     vec3 rayColor = vec3(1);
 
+    int volumeBounces = 0;
+
     for (int i = 0; i <= maxBounceLimit; i++) {
         Hit hit = CalculateRayCollision(ray);
-        if (hit.happened) {
+        float volumeTravelDistance = TraverseVolume(ray, hit.distance_, rngState);
+
+        if (volumeTravelDistance != -1.0 && volumeBounces < maxVolumeBounces) {
+            vec3 volumeScatterPosition = ray.origin + ray.direction * volumeTravelDistance;
+            ray = BounceRayVolume(ray, volumeScatterPosition, rngState);
+            volumeBounces++;
+        }
+
+        if (!hit.happened) {
+            incomingLight += GetEnvironmentLight(ray) * rayColor;
+            break;
+        } else {
             Material material = hit.material;
-
-            vec3 diffuse = normalize(hit.normal + RandDirection(rngState));
-            vec3 specular = reflect(ray.direction, hit.normal);
-            ray.direction = mix(diffuse, specular, material.smoothness);
-            ray.origin = hit.position;
-
             vec3 emittedLight = material.emissionColor * material.emissionStrength;
+
+            ray = BounceRaySurface(ray, hit, rngState);
 
             incomingLight += emittedLight * rayColor;
             rayColor *= material.color;
-
-        } else {
-            incomingLight += GetEnvironmentLight(ray) * rayColor;
-            break;
-        }
+        }        
     }
 
     return incomingLight;
@@ -193,16 +226,16 @@ vec3 ACESFilm(vec3 x) {
 void main() {
     float aspect = resolution.x / resolution.y;
     vec2 uv = gl_FragCoord.xy / resolution;
-    vec2 ndc = uv * 2.0 - 1.0; // [-1,1]
+    vec2 ndc = uv * 2.0 - 1.0;
     ndc.x *= aspect;
-    ndc.y *= -1.0; // Invert y-axis for OpenGL
+    ndc.y *= -1.0;
 
     float focalLength = 1 / tan(radians(fov) * 0.5);
     vec3 baseRayDirection = vec3(ndc, focalLength);
 
     mat3 rayScreenToWorld = mat3(right, up, forward);
 
-    uint pixelIndex = uint(gl_FragCoord.y) * uint(resolution.x) + uint(gl_FragCoord.x);
+    uint pixelIndex = uint(gl_FragCoord.y * resolution.x + gl_FragCoord.x);
     uint rngState = pixelIndex * 988765 + accumulationFrame * 234567;
 
     vec3 light = vec3(0);
@@ -219,6 +252,7 @@ void main() {
     light = ACESFilm(light);
 
     vec3 color = mix(texture(prev, uv).rgb, light, 1 / float(accumulationFrame));
+    // vec3 color = light;
 
     fragment = vec4(color, 1);
 }

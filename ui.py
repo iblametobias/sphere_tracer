@@ -104,6 +104,14 @@ class UI:
         if changed_skybox:
             self.app.reset_accumulation()
 
+        changed_density, self.app.density = imgui.slider_float(
+            "Density",
+            self.app.density,
+            0.0, 1.0, format="%.2f"
+        )
+        if changed_density:
+            self.app.reset_accumulation()
+
         remove_indices = []
         for i, sphere in enumerate(self.app.spheres):
             if not imgui.tree_node(f"Sphere {i}"):
